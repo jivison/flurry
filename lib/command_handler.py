@@ -6,7 +6,7 @@ from PIL import Image
 
 from lib.embed_parser import EmbedParser, NoReferenceException, NotZephyrException, NoEmbedException
 from lib.image_manipulator import ImageManipulator
-from lib.card_store import CardStore
+from lib.card_store import CardStore, Card
 
 
 class ClientFacingException(Exception):
@@ -71,12 +71,14 @@ class CommandHandler:
                                re.IGNORECASE | re.MULTILINE)
             color = regex.search(embed.description).group()
 
-        elif "View Card" in embed.author.name:
-            url = await self.embed_parser.parse_embed(embed)
+        elif "View Card" in embed.author.name or "Flurry | Preview Card" in embed.author.name:
+            url = await self.embed_parser.parse_embed_image(embed)
+            description = self.embed_parser.parse_embed_description(embed)
 
-            card = self.image_manipulator.get_image_from_url(url)
+            card_image = self.image_manipulator.get_image_from_url(url)
 
-            self.card_store.add_card(message.author.id, card)
+            card = self.card_store.add_card(
+                message.author.id, card_image, description)
             await message.add_reaction("✅")
 
             color = self.get_argument(message, 0)
@@ -88,17 +90,28 @@ class CommandHandler:
         if color != None and card != None:
             await self.dye_card(card, message, color)
 
-    async def dye_card(self, card: Image.Image, message: discord.Message, color: str) -> None:
+    async def dye_card(self, card: Card, message: discord.Message, color: str) -> None:
         image = None
 
         try:
-            image = self.image_manipulator.color(card, color)
+            image = self.image_manipulator.color(card.card, color)
         except ValueError:
             raise ClientFacingException(
                 "Please enter a valid hex code! _(eg. #ffc107)_")
 
-        await self.send_pillow_image(message.channel, image)
+        image_file = self.get_discord_file(image)
 
+        readableHex = int(hex(int(color.replace("#", ""), 16)), 0)
+
+        embed = discord.Embed(
+            color=readableHex, description=card.description + f"\n\nPreviewing with **{color}**")
+
+        embed.set_author(
+            name=f"Flurry | Preview Card | {message.author}", icon_url=message.author.avatar_url)
+
+        embed.set_image(url="attachment://ooga.png")
+
+        await message.channel.send(embed=embed, file=image_file)
     def is_valid_message(self, message: discord.Message) -> bool:
         return message.author != self.client.user and self.mentions_user(message.content, self.client.user)
 
@@ -119,9 +132,9 @@ class CommandHandler:
         except IndexError:
             return None
 
-    async def send_pillow_image(self, channel: discord.TextChannel, image: Image.Image) -> None:
+    def get_discord_file(self, image: Image.Image) -> discord.File:
         with io.BytesIO() as image_binary:
             image.save(image_binary, "PNG")
             image_binary.seek(0)
 
-            await channel.send(file=discord.File(fp=image_binary, filename="ooga.png"))
+            return discord.File(fp=image_binary, filename="ooga.png")

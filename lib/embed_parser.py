@@ -1,4 +1,5 @@
 import discord
+import re
 
 from lib.config import Config, get_config
 
@@ -24,7 +25,7 @@ class EmbedParser:
     async def get_embed(self, message: discord.Message) -> discord.Embed:
         reference = await self.get_message(message.channel, message.reference)
 
-        if reference.author.id != self.config.zephyr_id:
+        if reference.author.id != self.config.zephyr_id and reference.author.id != self.config.flurry_id:
             raise NotZephyrException()
 
         if len(reference.embeds) < 1:
@@ -38,8 +39,19 @@ class EmbedParser:
 
         return await channel.fetch_message(reference.message_id)
 
-    async def parse_embed(self, embed: discord.Embed) -> str:
+    async def parse_embed_image(self, embed: discord.Embed) -> str:
         if (embed.image != None):
             return embed.image.url
-        
+
         raise Exception("No image!")
+
+    def parse_embed_description(self, embed: discord.Embed) -> str:
+        if ("Flurry" in embed.author.name):
+            return embed.description.split("\n")[0]
+        else:
+            if (embed.description == None):
+                return ""
+
+            regex = re.compile(r"(?<=: )`#\d+` \*\*.+")
+
+            return regex.search(embed.description).group()
