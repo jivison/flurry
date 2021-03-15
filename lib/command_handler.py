@@ -92,7 +92,7 @@ class CommandHandler:
 
     async def dye_card(self, card: Card, message: discord.Message, color: str) -> None:
         image = None
-
+        
         try:
             image = self.image_manipulator.color(card.card, color)
         except ValueError:
