@@ -15,17 +15,7 @@ async def on_ready():
 
 @client.event
 async def on_message(message: discord.Message):
-    try:
-        await handler.handle(message)
-
-    except ClientFacingException as e:
-        embed = discord.Embed(color=discord.Colour.red(),
-                              description=e.message)
-
-        embed.set_author(
-            name=f"Error | {message.author}", icon_url=message.author.avatar_url)
-
-        await message.channel.send(embed=embed)
+    await handler.handle(message)
 
 
 client.run(get_config().discord_token)

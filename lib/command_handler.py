@@ -1,140 +1,96 @@
-import discord
-import io
-import re
-from typing import List, Optional
-from PIL import Image
+from discord import Message, Client, Embed, Colour, User, TextChannel, MessageReference
+from typing import Optional, List
 
-from lib.embed_parser import EmbedParser, NoReferenceException, NotZephyrException, NoEmbedException
-from lib.image_manipulator import ImageManipulator
-from lib.card_store import CardStore, Card
-
-
-class ClientFacingException(Exception):
-    message: str
-
-    def __init__(self, message: str):
-        super().__init__(message)
-        self.message = message
+from lib.config import get_config
+from lib.commands.base_command import BaseCommand, ClientFacingException
+from lib.commands.ping import Ping
+from lib.commands.help import Help
+from lib.commands.dye_card import DyeCard
 
 
 class CommandHandler:
-    client: discord.Client
-    embed_parser: EmbedParser
-    image_manipulator: ImageManipulator
-    card_store: CardStore
+    def __init__(self, client: Client):
+        self.config = get_config()
 
-    def __init__(self, client: discord.client):
         self.client = client
-        self.embed_parser = EmbedParser()
-        self.image_manipulator = ImageManipulator()
-        self.card_store = CardStore()
 
-    async def handle(self, message: discord.Message) -> None:
-        if not self.is_valid_message(message):
-            return None
+        self.commands = [
+            Ping, Help, DyeCard
+        ]
 
-        embed = None
+    async def handle(self, message: Message) -> None:
+        if not self.__is_valid_message(message):
+            return
+
+        messageContent = self.__get_message_content(
+            message).strip().split(" ")
+
+        commandName, args = messageContent[0], [
+        ] if messageContent == [""] else messageContent
+
+        command = await self.__find_command(commandName, message)
+
+        if command != None:
+            await self.__run_command(command, args[command.args_start_at:])
+
+    async def __find_command(self, commandName: str, message: Message) -> Optional[BaseCommand]:
+        embed = await self.get_reply_embed(message)
+
+        for command in self.commands:
+            commandInstance: BaseCommand = command(self.client, message, embed)
+
+            if commandInstance.should_run(commandName):
+                return commandInstance
+
+        return None
+
+    async def __run_command(self, command: BaseCommand, args: List[str]) -> None:
+        print(f"Running command '{type(command).__name__}'")
 
         try:
-            embed = await self.embed_parser.get_embed(message)
+            await command.run(args)
 
-            await self.handle_embed_reply(message, embed)
+        except ClientFacingException as e:
+            message = command.message
 
-        except NoReferenceException:
-            card = self.card_store.get_card(message.author.id)
-            color = self.get_argument(message, 0)
+            embed = Embed(color=Colour.red(),
+                          description=e.message)
 
-            if (card != None and color != None):
-                await self.dye_card(card, message, color)
-            elif card == None:
-                raise ClientFacingException(
-                    "Please mention me in a reply to a Zephyr `.card` embed to select a card!")
-            elif color == None:
-                raise ClientFacingException(
-                    "Please specify a colour for me to dye the card with!")
+            embed.set_author(
+                name=f"Error | {message.author}", icon_url=message.author.avatar_url)
 
-        except (NoEmbedException, NotZephyrException):
-            pass
+            await message.channel.send(embed=embed)
 
-    async def handle_embed_reply(self, message: discord.Message, embed: discord.Embed) -> None:
-        color = None
-        card = None
+    def __is_valid_message(self, message: Message) -> bool:
+        return message.author != self.client.user and self.__mentions_user(message.content, self.client.user)
 
-        if "View Dye" in embed.author.name:
-            card = self.card_store.get_card(message.author.id)
-
-            if card == None:
-                raise ClientFacingException(
-                    "Please mention me in a reply to a Zephyr `.card` embed to select a card!")
-
-            regex = re.compile(r"(?<=Hex: \*\*)#\w+",
-                               re.IGNORECASE | re.MULTILINE)
-            color = regex.search(embed.description).group()
-
-        elif "View Card" in embed.author.name or "Flurry | Preview Card" in embed.author.name:
-            url = await self.embed_parser.parse_embed_image(embed)
-            description = self.embed_parser.parse_embed_description(embed)
-
-            card_image = self.image_manipulator.get_image_from_url(url)
-
-            card = self.card_store.add_card(
-                message.author.id, card_image, description)
-            await message.add_reaction("✅")
-
-            color = self.get_argument(message, 0)
-
-        else:
-            raise ClientFacingException(
-                "Please mention me with a valid Zephyr embed! (either `viewdye` or `viewcard`)")
-
-        if color != None and card != None:
-            await self.dye_card(card, message, color)
-
-    async def dye_card(self, card: Card, message: discord.Message, color: str) -> None:
-        image = None
-        
-        try:
-            image = self.image_manipulator.color(card.card, color)
-        except ValueError:
-            raise ClientFacingException(
-                "Please enter a valid hex code! _(eg. #ffc107)_")
-
-        image_file = self.get_discord_file(image)
-
-        readableHex = int(hex(int(color.replace("#", ""), 16)), 0)
-
-        embed = discord.Embed(
-            color=readableHex, description=card.description + f"\n\nPreviewing with **{color}**")
-
-        embed.set_author(
-            name=f"Flurry | Preview Card | {message.author}", icon_url=message.author.avatar_url)
-
-        embed.set_image(url="attachment://ooga.png")
-
-        await message.channel.send(embed=embed, file=image_file)
-    def is_valid_message(self, message: discord.Message) -> bool:
-        return message.author != self.client.user and self.mentions_user(message.content, self.client.user)
-
-    def mentions_user(self, content: str, user: discord.User) -> bool:
+    def __mentions_user(self, content: str, user: User) -> bool:
         return f"<@!{user.id}>" in content or f"<@{user.id}>" in content
 
-    def get_arguments(self, message: discord.Message, required_length: int = None) -> List[str]:
-        arguments = message.content.split()[1:]
+    def __get_message_content(self, message: Message) -> str:
+        messageContent: str = message.content
 
-        if required_length != None and len(arguments) < required_length:
-            raise ClientFacingException("Please enter a colour!")
-        else:
-            return arguments
+        messageContent = messageContent.replace(
+            f"<@!{self.client.user.id}>", "").replace(f"<@{self.client.user.id}>", "").strip()
 
-    def get_argument(self, message: discord.Message, index: int) -> Optional[str]:
-        try:
-            return self.get_arguments(message)[index]
-        except IndexError:
+        return messageContent
+
+    async def get_reply_embed(self, message: Message) -> Optional[Embed]:
+        reference = await self.__get_message(message.channel, message.reference)
+
+        if reference == None:
             return None
 
-    def get_discord_file(self, image: Image.Image) -> discord.File:
-        with io.BytesIO() as image_binary:
-            image.save(image_binary, "PNG")
-            image_binary.seek(0)
+        if reference.author.id != self.config.zephyr_id and reference.author.id != self.config.flurry_id:
+            return None
 
-            return discord.File(fp=image_binary, filename="ooga.png")
+        if len(reference.embeds) < 1:
+            None
+
+        return reference.embeds[0]
+
+    async def __get_message(self, channel: TextChannel, reference: Optional[MessageReference]) -> Optional[Message]:
+        if reference == None:
+            return None
+
+        return await channel.fetch_message(reference.message_id)

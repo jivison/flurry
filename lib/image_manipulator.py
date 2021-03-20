@@ -33,6 +33,3 @@ class ImageManipulator:
 
     def get_size(self, is_large: bool) -> Tuple[int, int]:
         return (629, 16) if is_large else (285, 8)
-        
-
-# 72 x 16
